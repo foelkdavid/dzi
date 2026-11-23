@@ -420,9 +420,11 @@ fn String file_uri(String path)
 
 fn void set_image_clipboard(String path, char[] png) => @pool()
 {
+	// Pixels for apps, the file for file managers (they paste x-special/gnome-copied-files), the URI for the rest.
 	String uri = file_uri(path);
-	String[2] mimes = { "image/png", "text/uri-list" };
-	char[][2] datas = { png, (char[])uri };
+	String files = string::tformat("copy\n%s", uri[:uri.len - 2]);
+	String[3] mimes = { "image/png", "x-special/gnome-copied-files", "text/uri-list" };
+	char[][3] datas = { png, (char[])files, (char[])uri };
 	if (ui::clipboard_set_data(&mimes, &datas)) { ui::toast("Image copied"); }
 	else { ui::toast("Could not copy the image", ui::RED); }
 }
