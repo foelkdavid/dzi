@@ -322,11 +322,7 @@ fn int main(String[] args)
 	defer { foreach (&t : thumb_loaders) t.loader.close(); foreach (&t : thumbs) if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); }
 	defer if (conv.running) { conv.worker.join()!!; conv.mutex.destroy(); if (conv.png) rl::mem_free(conv.png); }
 	ui::app_args(args);
-	@pool()
-	{
-		picker::add_place(ui::I_IMAGE, "Pictures", txt::join(sys::home(), "Pictures"));
-		foreach (e : image_types) picker::set_ext_icon(e, ui::I_IMAGE);
-	};
+	foreach (e : image_types) picker::set_ext_icon(e, ui::I_IMAGE);
 	show(cur);
 	while (ui::running()) frame();
 	return 0;
