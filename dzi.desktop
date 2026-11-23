@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=dzi
+Comment=Minimal image viewer
+Exec=@EXEC@ %f
+Icon=image-x-generic
+Terminal=false
+Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/bmp;image/gif;
+StartupNotify=false
