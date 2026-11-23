@@ -1,37 +1,50 @@
-# dzi — display ze images
+<p align="center">
+  <img src="assets/dzi.svg" width="112" alt="dzi icon">
+</p>
 
-A minimal, fast image viewer for Wayland, built on [bmu](https://github.com/foelkdavid/bmu) (C3 + raylib).
+<h1 align="center">dzi</h1>
+<p align="center"><b>display ze images</b> · a minimal, fast image viewer for Wayland</p>
+
+<p align="center">
+  <img src="docs/screenshot.png" width="720" alt="dzi showing a landscape with the thumbnail strip">
+</p>
+
+Open an image and flip through its folder with the arrow keys: the next and previous images are decoded ahead, so
+switching is instant. Zoom and pan, show a thumbnail strip, copy the image or its path. PNG, JPEG, BMP and GIF.
+
+**Press `Ctrl + K`** for all keyboard shortcuts and the About page.
+
+## Requirements to run
+
+- Linux x86_64 with a **Wayland** session (no X11 / XWayland)
+- OpenGL 3.3 graphics driver (Mesa or your GPU vendor's)
+- `libwayland-client`, `libwayland-cursor`, `libwayland-egl`, `libxkbcommon`, `libEGL`: already present on any Wayland desktop
+
+## Requirements to build
+
+- [C3](https://c3-lang.org) compiler `c3c` **0.8.x**
+- a C compiler for linking (`gcc` or `clang`)
+- `git`, `python3`
+
+raylib and the UI font come with the [bmu](https://github.com/foelkdavid/bmu) submodule; nothing else to install.
+
+## Download, build, install
 
 ```sh
-dzi photo.jpg          # or: dzi some/folder
+git clone --recurse-submodules https://github.com/foelkdavid/dzi.git
+cd dzi
+c3c build install --trust=full
 ```
 
-| Key | Action |
-|---|---|
-| Left / Right | previous / next image in the folder (wraps) |
-| Home / End | first / last image |
-| Ctrl + / - / 0, mouse wheel | zoom the image (0 = fit); drag to pan |
-| Ctrl + Shift + / - / 0 | zoom the interface |
-| Ctrl + S | show / hide the bottom bar: image info, Copy image / Copy path, thumbnail strip |
-| Ctrl + K | shortcuts and About (version, backend, GPU, paths) |
-| q / Escape | quit |
-
-PNG, JPEG, BMP and GIF (first frame). Images are decoded at full resolution on background threads; the next and
-previous images are decoded ahead, so switching is instant. Thumbnails are decoded in the background only for
-the strip cells on screen (64 kept). Copy image puts the pixels on the clipboard as PNG (converted on a thread for other formats); on Wayland it stays available while dzi runs (or via a clipboard manager). Images fit the window but are never enlarged past
-their real pixel size until you zoom. The bar state and the interface zoom are remembered in
-`$XDG_CONFIG_HOME/dzi/settings` (default `~/.config/dzi/settings`), written on exit when changed. Limits: 16384 px edge, 64 megapixels, 128 MiB files, 8192 images per folder.
-
-## Build and install
-
-Needs `c3c` 0.8.x and a Wayland session.
+This installs `~/.local/bin/dzi`, a desktop launcher ("Open with" for images) and the icon (no sudo). Make sure
+`~/.local/bin` is on your `PATH`, then run `dzi photo.jpg` or `dzi some/folder`.
 
 ```sh
-git clone --recurse-submodules git@github.com:foelkdavid/dzi.git
-cd dzi && c3c build install --trust=full     # ~/.local/bin/dzi + desktop launcher ("Open with" for images) + icon
-git pull --recurse-submodules && c3c build install --trust=full    # update
-c3c build uninstall --trust=full
+git pull --recurse-submodules && c3c build install --trust=full   # update
+c3c build uninstall --trust=full                                   # uninstall
 ```
 
-The embedded UI font is OFL 1.1 and raylib is zlib-licensed; their notices are in `licenses/` and are installed
-with the binary.
+## Licenses
+
+The embedded UI font is SIL OFL 1.1 and raylib is zlib-licensed; their notices are in [`licenses/`](licenses/) and are
+installed with the app.
