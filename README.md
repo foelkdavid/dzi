@@ -44,7 +44,14 @@ git pull --recurse-submodules && c3c build install --trust=full   # update
 c3c build uninstall --trust=full                                   # uninstall
 ```
 
-## Licenses
+## Built with
 
-The embedded UI font is SIL OFL 1.1 and raylib is zlib-licensed; their notices are in [`licenses/`](licenses/) and are
-installed with the app.
+| | used for | license |
+|---|---|---|
+| [C3](https://c3-lang.org) ([c3c](https://github.com/c3lang/c3c)) | language, compiler, standard library | [compiler LGPL-3.0, standard library MIT](https://github.com/c3lang/c3c#licensing) |
+| [bmu](https://github.com/foelkdavid/bmu) | UI toolkit (submodule) | not chosen yet |
+| [raylib](https://www.raylib.com) 6.0 | window, input, drawing (static) | [zlib](licenses/RAYLIB-LICENSE.txt) |
+| [GLFW](https://www.glfw.org) 3.4 | Wayland window backend, inside raylib | [zlib](https://www.glfw.org/license.html) |
+| [CodeNewRoman Nerd Font Propo](https://www.nerdfonts.com/font-downloads) | embedded UI font ([Code New Roman](https://github.com/ryanoasis/nerd-fonts/tree/master/patched-fonts/CodeNewRoman) by Sam Radian + [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts) icons) | [SIL OFL 1.1](licenses/FONT-OFL.txt) |
+
+The font and raylib notices are in [`licenses/`](licenses/) and are installed with the app.
