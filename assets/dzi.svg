@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#282828"/>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="none" stroke="#504945" stroke-width="4"/>
+  <!-- the next photo waiting behind: instant switching -->
+  <rect x="36" y="24" width="72" height="56" rx="6" fill="#665c54" transform="rotate(8 72 52)"/>
+  <!-- the photo: light frame, sky, sun, two hills -->
+  <rect x="18" y="38" width="80" height="64" rx="7" fill="#ebdbb2"/>
+  <clipPath id="pic"><rect x="25" y="45" width="66" height="50" rx="3"/></clipPath>
+  <g clip-path="url(#pic)">
+    <rect x="25" y="45" width="66" height="50" fill="#458588"/>
+    <circle cx="76" cy="60" r="8" fill="#fabd2f"/>
+    <path d="M25 95 L48 66 L66 88 Z" fill="#98971a"/>
+    <path d="M50 95 L72 74 L95 95 Z" fill="#79740e"/>
+  </g>
+</svg>

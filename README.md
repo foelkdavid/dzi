@@ -28,7 +28,7 @@ Needs `c3c` 0.8.x and a Wayland session.
 
 ```sh
 git clone --recurse-submodules git@github.com:foelkdavid/dzi.git
-cd dzi && c3c build install --trust=full     # ~/.local/bin/dzi + desktop launcher ("Open with" for images)
+cd dzi && c3c build install --trust=full     # ~/.local/bin/dzi + desktop launcher ("Open with" for images) + icon
 git pull --recurse-submodules && c3c build install --trust=full    # update
 c3c build uninstall --trust=full
 ```
