@@ -1,7 +1,7 @@
 module dzi;
 import std::math, std::core::string, std::io, std::sort, std::thread, libc;
 import raylib6::rl;
-import bmu::ui, bmu::txt, bmu::sys, bmu::image;
+import bmu::ui, bmu::txt, bmu::sys, bmu::image, bmu::picker;
 
 // dzi - display ze images. One image, centered and fitted; Left/Right walk the folder (neighbours are decoded
 // in the background, so switching is instant); Ctrl+S shows the folder strip at the bottom.
@@ -62,6 +62,7 @@ ui::Shortcut[*] help_rows = {
 	{ "VIEW", "", true },
 	{ "Left / Right", "Previous / next image in the folder", false },
 	{ "Home / End", "First / last image", false },
+	{ "Ctrl + O", "Open an image", false },
 	{ "Ctrl + / - / 0", "Zoom the image (0 = fit)", false },
 	{ "Mouse wheel", "Zoom around the pointer", false },
 	{ "Drag", "Move the zoomed image", false },
@@ -90,6 +91,7 @@ fn void prefs_load() => @pool()
 	foreach (line : data.tsplit("\n"))
 	{
 		if (line.starts_with("bar=")) bar = line == "bar=1";
+		if (line.starts_with("dir=")) txt::set(&picker::last_dir, line[4..]);
 		if (line.starts_with("ui_scale="))
 		{
 			if (try v = line[9..].to_int()) if (v == 0 || (v >= 75 && v <= 300)) ui_percent = v;
@@ -103,7 +105,8 @@ fn void prefs_save() => @pool()
 	String file = txt::view(&config_file);
 	if (!sys::mkdirs(txt::dirname(file))) return;
 	String tmp = txt::join(txt::dirname(file), "settings.tmp");
-	if (sys::write_file(tmp, string::tformat("bar=%d\nui_scale=%d\n", bar ? 1 : 0, ui_percent))) sys::move(tmp, file);
+	String data = string::tformat("bar=%d\nui_scale=%d\ndir=%s\n", bar ? 1 : 0, ui_percent, txt::view(&picker::last_dir));
+	if (sys::write_file(tmp, data)) sys::move(tmp, file);
 }
 
 fn void settings_draw() => @pool()
@@ -239,16 +242,59 @@ fn void show(int i) => @pool()
 	rl::set_window_title(string::tformat("%s - dzi", txt::view(&images[cur].name)).zstr_tcopy());
 }
 
+const int PICK_IMAGE = 1;
+String[5] image_types = { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
+
+<* Ctrl+O / the empty screen's button: the picker starts in the last folder opened through it, else the current one. *>
+fn void open_dialog()
+{
+	String dir = txt::empty(&picker::last_dir) ? txt::view(&folder) : txt::view(&picker::last_dir);
+	picker::start(PICK_IMAGE, FILE, "Open an image", dir.len ? dir : "~", &image_types);
+}
+
+<* Drop everything of the old folder (decodes in flight, textures, thumbnails), then list the new one. *>
+fn void open_path(String p) => @pool()
+{
+	foreach (&s : slots) { s.loader.cancel(); if (s.loaded) rl::unload_texture(s.tex); s.loaded = false; s.index = -1; }
+	foreach (&t : thumb_loaders) { t.loader.cancel(); t.index = -1; }
+	foreach (&t : thumbs) { if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); *t = { .index = -1 }; }
+	strip_scroll = 0;
+	txt::set(&folder, txt::dirname(p));
+	scan(txt::dirname(p), txt::basename(p));
+	show(cur);
+	prefs_dirty = true;
+}
+
+fn void handle_pick()
+{
+	int why;
+	String path;
+	if (picker::take(&why, &path) && why == PICK_IMAGE) open_path(path);
+}
+
+<* No image: what to do next, centred. *>
+fn void draw_empty(float w, float h) => @pool()
+{
+	String msg = txt::empty(&folder) ? "No image open" : string::tformat("No images in %s", home_short(txt::view(&folder)));
+	float cy = h / 2 - 70;
+	ui::text(ui::I_IMAGE, w / 2 - ui::text_w(ui::I_IMAGE, 48) / 2, cy, 48, ui::BG3);
+	float tw = math::min(ui::text_w(msg, 18), w - 48);
+	ui::text_fit(msg, w / 2 - tw / 2, cy + 64, tw, 18, ui::FG4);
+	if (ui::button({ w / 2 - 100, cy + 100, 200, 40 }, "Open image", PRIMARY, ui::I_FOLDER_OPEN)) open_dialog();
+	String hint = "Ctrl + O · PNG, JPEG, BMP, GIF";
+	ui::text(hint, w / 2 - ui::text_w(hint, 13) / 2, cy + 152, 13, ui::GRAY);
+}
+
 fn int main(String[] args)
 {
-	String target = ".";
+	String target;
 	for (usz i = 1; i < args.len; i++)
 	{
 		switch (args[i])
 		{
 			case "--shot": case "--frames": case "--scale": i++;
 			case "--help": case "-h":
-				io::printn("Usage: dzi [IMAGE | FOLDER]\nLeft/Right: previous/next image in the folder; Home/End: first/last.\nCtrl+S: folder strip. Ctrl +/-/0 or wheel: zoom image (0 = fit); drag: pan. Ctrl+Shift +/-/0: interface zoom.\nq / Escape: quit.");
+				io::printn("Usage: dzi [IMAGE | FOLDER]\nWithout an argument (or Ctrl+O): choose an image.\nLeft/Right: previous/next image in the folder; Home/End: first/last.\nCtrl+S: folder strip. Ctrl +/-/0 or wheel: zoom image (0 = fit); drag: pan. Ctrl+Shift +/-/0: interface zoom.\nq / Escape: quit.");
 				return 0;
 			default: target = args[i];
 		}
@@ -257,7 +303,7 @@ fn int main(String[] args)
 	foreach (&t : thumbs) t.index = -1;
 	foreach (&t : thumb_loaders) t.index = -1;
 	// Folder listing and the first decode start before the window: decoding overlaps window creation.
-	@pool()
+	if (target.len) @pool()
 	{
 		char[4096] real;
 		sys::realpath(&real, target);
@@ -276,6 +322,11 @@ fn int main(String[] args)
 	defer { foreach (&t : thumb_loaders) t.loader.close(); foreach (&t : thumbs) if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); }
 	defer if (conv.running) { conv.worker.join()!!; conv.mutex.destroy(); if (conv.png) rl::mem_free(conv.png); }
 	ui::app_args(args);
+	@pool()
+	{
+		picker::add_place(ui::I_IMAGE, "Pictures", txt::join(sys::home(), "Pictures"));
+		foreach (e : image_types) picker::set_ext_icon(e, ui::I_IMAGE);
+	};
 	show(cur);
 	while (ui::running()) frame();
 	return 0;
@@ -283,16 +334,17 @@ fn int main(String[] args)
 
 fn void frame() => @pool()
 {
-	ui::frame_begin(settings_open);
+	ui::frame_begin(settings_open || picker::open);
 	if (ui::zoom_changed) { ui_percent = (int)math::round(ui::scale * 100); prefs_dirty = true; }
-	if (ui::ctrl_down() && ui::letter('k')) { settings_open = !settings_open; if (settings_open && settings_tab == 1) collect_about(); ui::top = settings_open ? 1 : 0; }
+	if (!picker::open && ui::ctrl_down() && ui::letter('k')) { settings_open = !settings_open; if (settings_open && settings_tab == 1) collect_about(); ui::top = settings_open ? 1 : 0; }
 	poll();
 	poll_conversion();
 	float w = ui::sw();
 	float h = ui::sh();
 	float view_h = bar ? h - BAR_H : h;
 	rl::RLVector2 mouse = rl::get_mouse_position();
-	bool keys = ui::top == 0;
+	bool keys = ui::top == 0 && !picker::open;
+	if (keys && ui::ctrl_down() && ui::letter('o')) open_dialog();
 	if (keys && ui::ctrl_down() && ui::letter('s')) { bar = !bar; prefs_dirty = true; }
 	if (keys && !ui::ctrl_down())
 	{
@@ -336,7 +388,7 @@ fn void frame() => @pool()
 	Slot* s = current();
 	if (!count)
 	{
-		ui::text("No images here (PNG, JPEG, BMP, GIF)", 24, 24, 18, ui::GRAY);
+		draw_empty(w, h);
 	}
 	else if (s && s.loaded)
 	{
@@ -355,6 +407,10 @@ fn void frame() => @pool()
 	}
 	if (bar && count) draw_strip(w, h);
 	settings_draw();
+	ui::layer = 1;
+	if (picker::open) picker::draw();
+	ui::layer = 0;
+	handle_pick();
 	ui::frame_end();
 }
 
