@@ -1,5 +1,5 @@
 module dzi;
-import std::math, std::core::string, std::core::dstring, std::io, std::sort, std::thread, libc;
+import std::math, std::core::string, std::io, std::sort, std::thread, libc;
 import raylib6::rl;
 import bmu::ui, bmu::txt, bmu::sys, bmu::image;
 
@@ -404,27 +404,12 @@ fn void update_info() => @pool()
 	txt::set(&info_detail, string::tformat("%s · %s", detail, home_short(txt::view(&folder))));
 }
 
-fn String file_uri(String path)
+<* Pixels only: with file URIs as well, Chromium/Electron apps (e.g. Flatpak Mattermost) prefer the file, which their
+   sandbox cannot read, and paste an empty attachment. Copy path covers the path. *>
+fn void set_image_clipboard(char[] png)
 {
-	DString out;
-	out.tinit();
-	out.append("file://");
-	foreach (c : path)
-	{
-		bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' || c == '-' || c == '_' || c == '.' || c == '~';
-		if (plain) { out.append_char(c); } else { out.appendf("%%%02X", c); }
-	}
-	out.append("\r\n");
-	return out.str_view();
-}
-
-fn void set_image_clipboard(String path, char[] png) => @pool()
-{
-	// Pixels for apps, the file for file managers (they paste x-special/gnome-copied-files), the URI for the rest.
-	String uri = file_uri(path);
-	String files = string::tformat("copy\n%s", uri[:uri.len - 2]);
-	String[3] mimes = { "image/png", "x-special/gnome-copied-files", "text/uri-list" };
-	char[][3] datas = { png, (char[])files, (char[])uri };
+	String[1] mimes = { "image/png" };
+	char[][1] datas = { png };
 	if (ui::clipboard_set_data(&mimes, &datas)) { ui::toast("Image copied"); }
 	else { ui::toast("Could not copy the image", ui::RED); }
 }
@@ -457,7 +442,7 @@ fn void copy_image() => @pool()
 	{
 		char[]? bytes = file::load_temp(path);
 		if (catch bytes) { ui::toast("Cannot read the image", ui::RED); return; }
-		set_image_clipboard(path, bytes);
+		set_image_clipboard(bytes);
 		return;
 	}
 	if (conv.running) { ui::toast("Still preparing the previous copy", ui::YELLOW); return; }
@@ -480,7 +465,7 @@ fn void poll_conversion()
 	conv.worker.join()!!;
 	conv.mutex.destroy();
 	conv.running = false;
-	if (conv.png) { set_image_clipboard(txt::view(&conv.path), conv.png[:conv.size]); rl::mem_free(conv.png); conv.png = null; }
+	if (conv.png) { set_image_clipboard(conv.png[:conv.size]); rl::mem_free(conv.png); conv.png = null; }
 	else { ui::toast("Could not convert the image", ui::RED); }
 }
 

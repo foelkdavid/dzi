@@ -18,8 +18,7 @@ dzi photo.jpg          # or: dzi some/folder
 
 PNG, JPEG, BMP and GIF (first frame). Images are decoded at full resolution on background threads; the next and
 previous images are decoded ahead, so switching is instant. Thumbnails are decoded in the background only for
-the strip cells on screen (64 kept). Copy image puts PNG data (converted on a thread for other formats) and the
-file URI on the clipboard; on Wayland it stays available while dzi runs (or via a clipboard manager). Images fit the window but are never enlarged past
+the strip cells on screen (64 kept). Copy image puts the pixels on the clipboard as PNG (converted on a thread for other formats); on Wayland it stays available while dzi runs (or via a clipboard manager). Images fit the window but are never enlarged past
 their real pixel size until you zoom. The bar state and the interface zoom are remembered in
 `$XDG_CONFIG_HOME/dzi/settings` (default `~/.config/dzi/settings`), written on exit when changed. Limits: 16384 px edge, 64 megapixels, 128 MiB files, 8192 images per folder.
 
