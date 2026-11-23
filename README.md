@@ -9,9 +9,6 @@
   <img src="docs/screenshot.png" width="720" alt="dzi showing a landscape with the thumbnail strip">
 </p>
 
-Open an image and flip through its folder with the arrow keys: the next and previous images are decoded ahead, so
-switching is instant. Zoom and pan, show a thumbnail strip, copy the image or its path. PNG, JPEG, BMP and GIF.
-
 **Press `Ctrl + K`** for all keyboard shortcuts and the About page.
 
 ## Requirements to run
