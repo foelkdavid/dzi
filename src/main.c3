@@ -54,6 +54,82 @@ struct Converter
 	int size;
 }
 
+// Ctrl+K dialog.
+bool settings_open;
+int settings_tab;
+float help_scroll;
+ui::Shortcut[*] help_rows = {
+	{ "VIEW", "", true },
+	{ "Left / Right", "Previous / next image in the folder", false },
+	{ "Home / End", "First / last image", false },
+	{ "Ctrl + / - / 0", "Zoom the image (0 = fit)", false },
+	{ "Mouse wheel", "Zoom around the pointer", false },
+	{ "Drag", "Move the zoomed image", false },
+	{ "BAR", "", true },
+	{ "Ctrl + S", "Info, copy buttons and thumbnails", false },
+	{ "Click a thumbnail", "Show that image", false },
+	{ "APP", "", true },
+	{ "Ctrl + Shift + / - / 0", "Zoom the interface", false },
+	{ "Ctrl + K", "This dialog", false },
+	{ "q / Escape", "Quit (Escape closes this dialog first)", false },
+};
+
+// Remembered settings: $XDG_CONFIG_HOME/dzi/settings, written on exit when changed.
+char[1024] config_file;
+int ui_percent;                // 0 = monitor default
+bool prefs_dirty;
+
+fn void prefs_load() => @pool()
+{
+	String base = sys::env("XDG_CONFIG_HOME");
+	if (!base.starts_with("/")) base = txt::join(sys::home(), ".config");
+	txt::set(&config_file, txt::join(base, "dzi/settings"));
+	String? data = sys::read_temp(txt::view(&config_file));
+	if (catch data) return;
+	if (data.len > 4096) return;
+	foreach (line : data.tsplit("\n"))
+	{
+		if (line.starts_with("bar=")) bar = line == "bar=1";
+		if (line.starts_with("ui_scale="))
+		{
+			if (try v = line[9..].to_int()) if (v == 0 || (v >= 75 && v <= 300)) ui_percent = v;
+		}
+	}
+}
+
+fn void prefs_save() => @pool()
+{
+	if (!prefs_dirty || txt::empty(&config_file)) return;
+	String file = txt::view(&config_file);
+	if (!sys::mkdirs(txt::dirname(file))) return;
+	String tmp = txt::join(txt::dirname(file), "settings.tmp");
+	if (sys::write_file(tmp, string::tformat("bar=%d\nui_scale=%d\n", bar ? 1 : 0, ui_percent))) sys::move(tmp, file);
+}
+
+fn void settings_draw() => @pool()
+{
+	if (!settings_open) return;
+	ui::layer = 1;
+	Rect box = ui::dialog(700, 560);
+	if (ui::dialog_header(box, ui::I_GEAR, "dzi") || rl::is_key_pressed(rl::RLKeyboardKey.ESCAPE)) settings_open = false;
+	float x = box.x + 16;
+	float w = box.width - 32;
+	if (ui::button({ x, box.y + 54, w / 2 - 4, 36 }, "Shortcuts", settings_tab == 0 ? PRIMARY : NORMAL)) settings_tab = 0;
+	if (ui::button({ x + w / 2 + 4, box.y + 54, w / 2 - 4, 36 }, "About", settings_tab == 1 ? PRIMARY : NORMAL)) { settings_tab = 1; collect_about(); }
+	Rect area = { x, box.y + 102, w, box.height - 118 };
+	if (settings_tab == 0) { help_scroll = ui::shortcut_table(area, &help_rows, help_scroll); }
+	else { ui::about_draw(area); }
+	ui::layer = 0;
+}
+
+fn void collect_about() => @pool()
+{
+	ui::about_reset("dzi", env::PROJECT_VERSION);
+	ui::about_add("Settings", txt::view(&config_file));
+	ui::about_add("Folder", txt::view(&folder));
+	ui::about_add("Images", string::tformat("%d in this folder", count));
+}
+
 char[4096] folder;
 Thumb[THUMBS] thumbs;
 ThumbLoader[THUMB_LOADERS] thumb_loaders;
@@ -190,7 +266,9 @@ fn int main(String[] args)
 		else { txt::set(&folder, txt::dirname(p)); scan(txt::dirname(p), txt::basename(p)); }
 	};
 	want();
-	ui::open("dzi", 1200, 800, 320, 240);
+	prefs_load();
+	defer prefs_save();
+	ui::open("dzi", 1200, 800, 320, 240, (float)ui_percent / 100);
 	ui::zoom_shift_only = true;
 	ui::clear_color = ui::BG_HARD;
 	defer ui::close();
@@ -205,15 +283,18 @@ fn int main(String[] args)
 
 fn void frame() => @pool()
 {
-	ui::frame_begin();
+	ui::frame_begin(settings_open);
+	if (ui::zoom_changed) { ui_percent = (int)math::round(ui::scale * 100); prefs_dirty = true; }
+	if (ui::ctrl_down() && ui::letter('k')) { settings_open = !settings_open; if (settings_open && settings_tab == 1) collect_about(); ui::top = settings_open ? 1 : 0; }
 	poll();
 	poll_conversion();
 	float w = ui::sw();
 	float h = ui::sh();
 	float view_h = bar ? h - BAR_H : h;
 	rl::RLVector2 mouse = rl::get_mouse_position();
-	if (ui::ctrl_down() && ui::letter('s')) bar = !bar;
-	if (!ui::ctrl_down())
+	bool keys = ui::top == 0;
+	if (keys && ui::ctrl_down() && ui::letter('s')) { bar = !bar; prefs_dirty = true; }
+	if (keys && !ui::ctrl_down())
 	{
 		if (ui::repeat(rl::RLKeyboardKey.RIGHT)) show(cur + 1);
 		if (ui::repeat(rl::RLKeyboardKey.LEFT)) show(cur - 1);
@@ -224,7 +305,7 @@ fn void frame() => @pool()
 	// Image zoom: Ctrl +/-/0 around the centre, the wheel around the pointer.
 	float factor = 1;
 	rl::RLVector2 at = { w / 2, view_h / 2 };
-	if (ui::ctrl_down() && !ui::shift_down())
+	if (keys && ui::ctrl_down() && !ui::shift_down())
 	{
 		int step = ui::zoom_step();
 		if (step > 0) factor = 1.25f;
@@ -232,7 +313,7 @@ fn void frame() => @pool()
 		if (rl::is_key_pressed(rl::RLKeyboardKey.ZERO)) { zoom = 1; pan = { 0, 0 }; }
 	}
 	float wheel = rl::get_mouse_wheel_move();
-	if (wheel != 0 && mouse[1] < view_h) { factor = wheel > 0 ? 1.15f : 1 / 1.15f; at = mouse; }
+	if (keys && wheel != 0 && mouse[1] < view_h) { factor = wheel > 0 ? 1.15f : 1 / 1.15f; at = mouse; }
 	if (factor != 1)
 	{
 		float nz = math::clamp(zoom * factor, 0.05f, 64.0f);
@@ -244,7 +325,7 @@ fn void frame() => @pool()
 		zoom = nz;
 	}
 	// Drag to pan.
-	if (rl::is_mouse_button_pressed(rl::RLMouseButton.LEFT) && mouse[1] < view_h) { panning = true; pan_from = mouse; }
+	if (keys && rl::is_mouse_button_pressed(rl::RLMouseButton.LEFT) && mouse[1] < view_h) { panning = true; pan_from = mouse; }
 	if (!rl::is_mouse_button_down(rl::RLMouseButton.LEFT)) panning = false;
 	if (panning)
 	{
@@ -273,6 +354,7 @@ fn void frame() => @pool()
 		ui::text_fit(string::tformat("%s: %s", txt::view(&images[cur].name), why), 24, 24, w - 48, 16, ui::RED);
 	}
 	if (bar && count) draw_strip(w, h);
+	settings_draw();
 	ui::frame_end();
 }
 
