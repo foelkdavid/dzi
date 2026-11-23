@@ -1,5 +1,5 @@
 module dzi;
-import std::math, std::core::string, std::io, std::sort;
+import std::math, std::core::string, std::core::dstring, std::io, std::sort, std::thread, libc;
 import raylib6::rl;
 import bmu::ui, bmu::txt, bmu::sys, bmu::image;
 
@@ -8,8 +8,14 @@ import bmu::ui, bmu::txt, bmu::sys, bmu::image;
 
 const int MAX_IMAGES = 8192;
 const int SLOTS = 3;           // current + next + previous, each with its own decoder
-const float BAR_H = 44;
-const float CELL_W = 220;
+const float INFO_H = 40;       // info row of the Ctrl+S bar
+const float STRIP_H = 112;     // thumbnail strip below it
+const float BAR_H = INFO_H + STRIP_H;
+const float CELL_W = 132;
+const float THUMB_W = 112;
+const float THUMB_H = 74;
+const int THUMBS = 64;         // cached thumbnail textures (LRU)
+const int THUMB_LOADERS = 2;   // background decoders for thumbnails
 
 struct Slot
 {
@@ -22,7 +28,41 @@ struct Slot
 	int height;
 }
 
+struct Thumb
+{
+	int index;                 // -1 = empty
+	rl::RLTexture2D tex;
+	bool failed;
+	ulong used;
+}
+
+struct ThumbLoader
+{
+	image::Loader loader;
+	int index;                 // image being decoded; -1 = idle
+}
+
+// Copy image: PNG bytes for the clipboard, converted on a thread when the file is not a PNG.
+struct Converter
+{
+	thread::Mutex mutex;
+	thread::Thread worker;
+	bool running;
+	bool done;
+	char[4096] path;
+	char* png;
+	int size;
+}
+
 char[4096] folder;
+Thumb[THUMBS] thumbs;
+ThumbLoader[THUMB_LOADERS] thumb_loaders;
+ulong thumb_clock;
+Converter conv;
+char[256] info_name;
+char[600] info_detail;
+int info_for = -1;             // image index the info was built for
+bool info_has_size;
 sys::Entry[MAX_IMAGES] images;
 int count;
 int cur;
@@ -119,6 +159,7 @@ fn void show(int i) => @pool()
 	zoom = 1;
 	pan = { 0, 0 };
 	want();
+	info_for = -1;
 	rl::set_window_title(string::tformat("%s - dzi", txt::view(&images[cur].name)).zstr_tcopy());
 }
 
@@ -137,6 +178,8 @@ fn int main(String[] args)
 		}
 	}
 	foreach (&s : slots) s.index = -1;
+	foreach (&t : thumbs) t.index = -1;
+	foreach (&t : thumb_loaders) t.index = -1;
 	// Folder listing and the first decode start before the window: decoding overlaps window creation.
 	@pool()
 	{
@@ -152,6 +195,8 @@ fn int main(String[] args)
 	ui::clear_color = ui::BG_HARD;
 	defer ui::close();
 	defer { foreach (&s : slots) { s.loader.close(); if (s.loaded) rl::unload_texture(s.tex); } }
+	defer { foreach (&t : thumb_loaders) t.loader.close(); foreach (&t : thumbs) if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); }
+	defer if (conv.running) { conv.worker.join()!!; conv.mutex.destroy(); if (conv.png) rl::mem_free(conv.png); }
 	ui::app_args(args);
 	show(cur);
 	while (ui::running()) frame();
@@ -162,6 +207,7 @@ fn void frame() => @pool()
 {
 	ui::frame_begin();
 	poll();
+	poll_conversion();
 	float w = ui::sw();
 	float h = ui::sh();
 	float view_h = bar ? h - BAR_H : h;
@@ -230,12 +276,215 @@ fn void frame() => @pool()
 	ui::frame_end();
 }
 
-<* Folder strip: fixed-width cells, only the visible ones are drawn; the current image stays in view. *>
+fn String home_short(String p)
+{
+	String home = sys::home();
+	if (home.len > 1 && p.starts_with(home) && (p.len == home.len || p[home.len] == '/')) return string::tformat("~%s", p[home.len..]);
+	return p;
+}
+
+fn void size_text(char[] out, long b) => @pool()
+{
+	if (b < 1000) { txt::set(out, string::tformat("%d B", b)); return; }
+	double v = (double)b;
+	String[4] units = { "kB", "MB", "GB", "TB" };
+	int u = -1;
+	while (v >= 1000 && u < 3) { v /= 1000; u++; }
+	txt::set(out, v < 10 ? string::tformat("%.1f %s", v, units[u]) : string::tformat("%d %s", (int)(v + 0.5), units[u]));
+}
+
+<* Info for the current image: one lstat when the image changes, rebuilt once its pixel size is known. *>
+fn void update_info() => @pool()
+{
+	Slot* s = current();
+	bool sized = s && s.loaded;
+	if (info_for == cur && info_has_size == sized) return;
+	info_for = cur;
+	info_has_size = sized;
+	String name = txt::view(&images[cur].name);
+	txt::set(&info_name, name);
+	sz? dot = name.rindex_of_char('.');
+	char[8] fmt;
+	if (try dot) { foreach (i, c : name[(usz)dot + 1..]) if (i < 7) fmt[i] = c >= 'a' && c <= 'z' ? c - 32 : c; }
+	String detail = sized ? string::tformat("%d × %d · %s", s.width, s.height, (ZString)&fmt) : string::tformat("%s", (ZString)&fmt);
+	libc::Stat st;
+	if (libc::stat(path_of(cur).zstr_tcopy(), &st) == 0)
+	{
+		char[32] size;
+		size_text(&size, st.st_size);
+		char[32] when;
+		libc::Tm tm;
+		Time_t mt = st.st_mtime;
+		libc::localtime_r(&mt, &tm);
+		libc::strftime(&when, when.len, "%Y-%m-%d %H:%M", &tm);
+		detail = string::tformat("%s · %s · modified %s", detail, txt::view(&size), (ZString)&when);
+	}
+	txt::set(&info_detail, string::tformat("%s · %s", detail, home_short(txt::view(&folder))));
+}
+
+fn String file_uri(String path)
+{
+	DString out;
+	out.tinit();
+	out.append("file://");
+	foreach (c : path)
+	{
+		bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' || c == '-' || c == '_' || c == '.' || c == '~';
+		if (plain) { out.append_char(c); } else { out.appendf("%%%02X", c); }
+	}
+	out.append("\r\n");
+	return out.str_view();
+}
+
+fn void set_image_clipboard(String path, char[] png) => @pool()
+{
+	String uri = file_uri(path);
+	String[2] mimes = { "image/png", "text/uri-list" };
+	char[][2] datas = { png, (char[])uri };
+	if (ui::clipboard_set_data(&mimes, &datas)) { ui::toast("Image copied"); }
+	else { ui::toast("Could not copy the image", ui::RED); }
+}
+
+fn int convert(void* arg)
+{
+	Converter* c = arg;
+	rl::RLImage img = rl::load_image((ZString)&c.path);
+	char* png;
+	int size;
+	if (img.data)
+	{
+		png = rl::export_image_to_memory(img, ".png", &size);
+		rl::unload_image(img);
+	}
+	c.mutex.lock();
+	c.png = png;
+	c.size = png ? size : 0;
+	c.done = true;
+	c.mutex.unlock();
+	return 0;
+}
+
+<* Copy image: PNG files go to the clipboard as they are; other formats are converted to PNG on a thread. *>
+fn void copy_image() => @pool()
+{
+	if (!count) return;
+	String path = path_of(cur);
+	if (txt::iends_with(path, ".png"))
+	{
+		char[]? bytes = file::load_temp(path);
+		if (catch bytes) { ui::toast("Cannot read the image", ui::RED); return; }
+		set_image_clipboard(path, bytes);
+		return;
+	}
+	if (conv.running) { ui::toast("Still preparing the previous copy", ui::YELLOW); return; }
+	if (catch conv.mutex.init()) return;
+	txt::set(&conv.path, path);
+	conv.done = false;
+	conv.png = null;
+	if (catch conv.worker.create(&convert, &conv)) { conv.mutex.destroy(); ui::toast("Could not copy the image", ui::RED); return; }
+	conv.running = true;
+	ui::toast("Preparing image for the clipboard…");
+}
+
+fn void poll_conversion()
+{
+	if (!conv.running) return;
+	conv.mutex.lock();
+	bool done = conv.done;
+	conv.mutex.unlock();
+	if (!done) return;
+	conv.worker.join()!!;
+	conv.mutex.destroy();
+	conv.running = false;
+	if (conv.png) { set_image_clipboard(txt::view(&conv.path), conv.png[:conv.size]); rl::mem_free(conv.png); conv.png = null; }
+	else { ui::toast("Could not convert the image", ui::RED); }
+}
+
+fn void copy_path() => @pool()
+{
+	if (!count) return;
+	rl::set_clipboard_text(path_of(cur).zstr_tcopy());
+	ui::toast("Path copied");
+}
+
+fn Thumb* thumb_of(int index)
+{
+	foreach (&t : thumbs) if (t.index == index) return t;
+	return null;
+}
+
+<* Thumbnails for the visible strip cells: two background decoders, nearest to the current image first; an LRU of
+   THUMBS textures. Nothing is requested while the strip is hidden. *>
+fn void update_thumbs(int first, int end) => @pool()
+{
+	foreach (&tl : thumb_loaders)
+	{
+		image::Result r;
+		if (tl.index < 0 || !tl.loader.take(&r)) continue;
+		// Least recently used slot that is not on screen.
+		Thumb* slot = &thumbs[0];
+		foreach (&t : thumbs)
+		{
+			if (t.index < 0) { slot = t; break; }
+			if (t.used < slot.used) slot = t;
+		}
+		if (slot.index >= 0 && slot.tex.id) rl::unload_texture(slot.tex);
+		*slot = { .index = tl.index, .used = ++thumb_clock };
+		if (r.status == READY)
+		{
+			slot.tex = rl::load_texture_from_image(r.pixels);
+			rl::unload_image(r.pixels);
+			slot.tex.set_filter(rl::RLTextureFilter.BILINEAR);
+		}
+		else { slot.failed = true; }
+		tl.index = -1;
+	}
+	foreach (&tl : thumb_loaders)
+	{
+		if (tl.index >= 0) continue;
+		// Nearest visible image without a thumbnail (the loaded slots draw their own texture).
+		int best = -1;
+		int best_d = 0x7fffffff;
+		for (int i = first; i < end; i++)
+		{
+			if (thumb_of(i)) continue;
+			bool busy;
+			foreach (&o : thumb_loaders) if (o.index == i) busy = true;
+			foreach (&sl : slots) if (sl.index == i && sl.loaded) busy = true;
+			if (busy) continue;
+			int d = math::abs(i - cur);
+			if (d < best_d) { best = i; best_d = d; }
+		}
+		if (best < 0) break;
+		tl.loader.limits = { .max_edge = (int)(THUMB_W * ui::scale), .max_file_bytes = 128 * 1024 * 1024, .max_pixels = 64 * 1000 * 1000 };
+		if (tl.loader.request(path_of(best))) tl.index = best;
+	}
+}
+
+fn void draw_fitted(rl::RLTexture2D tex, Rect box)
+{
+	float k = math::min(box.width / (float)tex.width, box.height / (float)tex.height);
+	float w = (float)tex.width * k;
+	float h = (float)tex.height * k;
+	rl::draw_texture_pro(tex, { 0, 0, (float)tex.width, (float)tex.height }, { box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h }, { 0, 0 }, 0, rl::WHITE);
+}
+
+<* Ctrl+S bar: info row with copy buttons, then the thumbnail strip (only visible cells are drawn or loaded). *>
 fn void draw_strip(float w, float h) => @pool()
 {
-	Rect area = { 0, h - BAR_H, w, BAR_H };
-	ui::panel(area, ui::BG);
-	ui::hline(0, h - BAR_H, w, ui::BG2);
+	float top = h - BAR_H;
+	ui::panel({ 0, top, w, BAR_H }, ui::BG);
+	ui::hline(0, top, w, ui::BG2);
+	update_info();
+	// Info row.
+	float bx = w - 16 - 130 - 8 - 150;
+	float name_w = math::min(ui::text_w(txt::view(&info_name), 15), (bx - 40) * 0.4f);
+	ui::text_fit(txt::view(&info_name), 16, top + 12, name_w, 15, ui::FG);
+	ui::text_fit(txt::view(&info_detail), 16 + name_w + 14, top + 13, math::max(0.0f, bx - name_w - 46), 14, ui::FG4);
+	if (ui::button({ bx, top + 6, 150, 30 }, "Copy image", NORMAL, ui::I_COPY)) copy_image();
+	if (ui::button({ w - 16 - 130, top + 6, 130, 30 }, "Copy path", NORMAL, ui::I_LINK)) copy_path();
+	// Strip.
+	float sy = top + INFO_H;
 	float content = (float)count * CELL_W;
 	float cx = (float)cur * CELL_W;
 	if (cx < strip_scroll) strip_scroll = cx;
@@ -243,17 +492,25 @@ fn void draw_strip(float w, float h) => @pool()
 	strip_scroll = math::clamp(strip_scroll, 0.0f, math::max(0.0f, content - w));
 	int first = (int)(strip_scroll / CELL_W);
 	int end = math::min(count, first + (int)(w / CELL_W) + 2);
+	update_thumbs(first, end);
 	for (int i = first; i < end; i++)
 	{
-		Rect cell = { (float)i * CELL_W - strip_scroll + 4, h - BAR_H + 6, CELL_W - 8, BAR_H - 12 };
+		Rect cell = { (float)i * CELL_W - strip_scroll + 6, sy + 4, CELL_W - 12, STRIP_H - 10 };
 		if (i == cur) { ui::panel(cell, ui::BG2, 4); }
 		else if (ui::hover(cell)) { ui::panel(cell, ui::BG1, 4); }
-		ui::text_fit(txt::view(&images[i].name), cell.x + 10, cell.y + 8, cell.width - 20, 15, i == cur ? ui::FG : ui::FG4);
+		Rect pic = { cell.x + (cell.width - THUMB_W) / 2, cell.y + 4, THUMB_W, THUMB_H };
+		Slot* full;
+		foreach (&sl : slots) if (sl.index == i && sl.loaded) full = sl;
+		Thumb* t = thumb_of(i);
+		if (full) { draw_fitted(full.tex, pic); }
+		else if (t && t.tex.id) { t.used = ++thumb_clock; draw_fitted(t.tex, pic); }
+		else { ui::text(ui::I_IMAGE, pic.x + pic.width / 2 - 10, pic.y + pic.height / 2 - 10, 20, t && t.failed ? ui::DIM_RED : ui::BG3); }
+		ui::text_fit(txt::view(&images[i].name), cell.x + 6, cell.y + THUMB_H + 10, cell.width - 12, 13, i == cur ? ui::FG : ui::FG4);
 		if (ui::clicked(cell)) show(i);
 	}
 	Slot* s = current();
-	String pos = s && s.loaded ? string::tformat("%d / %d · %d × %d", cur + 1, count, s.width, s.height) : string::tformat("%d / %d", cur + 1, count);
+	String pos = string::tformat("%d / %d", cur + 1, count);
 	float pw = ui::text_w(pos, 13) + 16;
-	ui::panel({ w - pw - 8, h - BAR_H - 26, pw, 22 }, ui::BG, 4);
-	ui::text(pos, w - pw, h - BAR_H - 22, 13, ui::FG4);
+	ui::panel({ w - pw - 8, top - 26, pw, 22 }, ui::BG, 4);
+	ui::text(pos, w - pw, top - 22, 13, ui::FG4);
 }

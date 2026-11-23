@@ -12,11 +12,13 @@ dzi photo.jpg          # or: dzi some/folder
 | Home / End | first / last image |
 | Ctrl + / - / 0, mouse wheel | zoom the image (0 = fit); drag to pan |
 | Ctrl + Shift + / - / 0 | zoom the interface |
-| Ctrl + S | show / hide the folder strip at the bottom |
+| Ctrl + S | show / hide the bottom bar: image info, Copy image / Copy path, thumbnail strip |
 | q / Escape | quit |
 
 PNG, JPEG, BMP and GIF (first frame). Images are decoded at full resolution on background threads; the next and
-previous images are decoded ahead, so switching is instant. Images fit the window but are never enlarged past
+previous images are decoded ahead, so switching is instant. Thumbnails are decoded in the background only for
+the strip cells on screen (64 kept). Copy image puts PNG data (converted on a thread for other formats) and the
+file URI on the clipboard; on Wayland it stays available while dzi runs (or via a clipboard manager). Images fit the window but are never enlarged past
 their real pixel size until you zoom. Limits: 16384 px edge, 64 megapixels, 128 MiB files, 8192 images per folder.
 
 ## Build and install
