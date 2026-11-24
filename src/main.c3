@@ -154,7 +154,7 @@ int fit_h = 2400;
 image::Loader detail;
 int detail_index = -1;         // image `detail` decodes at full size; -1 = idle
 // Never an empty view while the next image decodes: the last image drawn stays up (its slot, or `kept` once its
-// slot was reused) under a "loading" badge, until the current one is ready.
+// slot was reused) until the current one is ready.
 int shown = -1;                // image index last drawn
 rl::RLTexture2D kept;          // texture of `shown` after its slot was reused; id 0 = none
 int kept_w;                    // its source size
@@ -244,21 +244,13 @@ fn float draw_image(rl::RLTexture2D tex, int src_w, int src_h, float w, float vi
 	return dw * sc;
 }
 
-<* The previous image while the current one decodes, with a badge naming what is coming. *>
-fn void draw_pending(float w, float view_h) => @pool()
+<* The previous image while the current one decodes (nothing before the first image is shown). *>
+fn void draw_pending(float w, float view_h)
 {
 	Slot* prev;
 	foreach (&o : slots) if (o.index == shown && o.loaded) prev = o;
 	if (prev) { draw_image(prev.tex, prev.width, prev.height, w, view_h); }
 	else if (kept.id) { draw_image(kept, kept_w, kept_h, w, view_h); }
-	else { return; } // nothing shown yet (startup, new folder): no badge flash for the first decode
-	String msg = string::tformat("%s  ·  %d / %d", txt::view(&images[cur].name), cur + 1, count);
-	float tw = math::min(ui::text_w(msg, 14), w - 120);
-	float bw = tw + 52;
-	Rect badge = { w / 2 - bw / 2, 14, bw, 32 };
-	ui::panel(badge, ui::BG, 6);
-	ui::text(ui::I_IMAGE, badge.x + 12, badge.y + 8, 15, ui::YELLOW);
-	ui::text_fit(msg, badge.x + 36, badge.y + 8, tw, 14, ui::FG);
 }
 
 fn image::Limits limits(bool screen)
