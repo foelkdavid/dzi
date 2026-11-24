@@ -389,7 +389,7 @@ fn void frame() => @pool()
 	else if (s && s.loaded)
 	{
 		// Fit inside the view without enlarging past 1 texel = 1 physical pixel, then the user zoom.
-		float sc = ui::scale;
+		float sc = ui::px;
 		float fit = math::min(1.0f, math::min(w * sc / (float)s.tex.width, view_h * sc / (float)s.tex.height));
 		float dw = (float)s.tex.width * fit * zoom / sc;
 		float dh = (float)s.tex.height * fit * zoom / sc;
@@ -577,7 +577,7 @@ fn void update_thumbs(int first, int end) => @pool()
 			if (d < best_d) { best = i; best_d = d; }
 		}
 		if (best < 0) break;
-		tl.loader.limits = { .max_edge = (int)(THUMB_W * ui::scale), .max_file_bytes = 128 * 1024 * 1024, .max_pixels = 64 * 1000 * 1000 };
+		tl.loader.limits = { .max_edge = (int)(THUMB_W * ui::px), .max_file_bytes = 128 * 1024 * 1024, .max_pixels = 64 * 1000 * 1000 };
 		if (tl.loader.request(path_of(best))) tl.index = best;
 	}
 }
