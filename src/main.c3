@@ -24,8 +24,9 @@ struct Slot
 	rl::RLTexture2D tex;
 	bool loaded;
 	image::Status status;
-	int width;
+	int width;                 // source size (the texture may be screen-sized)
 	int height;
+	bool full;                 // texture has the source resolution
 }
 
 struct Thumb
@@ -146,6 +147,12 @@ sys::Entry[MAX_IMAGES] images;
 int count;
 int cur;
 Slot[SLOTS] slots;
+// Slots decode to fit the screen (physical px): small uploads, little VRAM, fast browsing of huge photos. Zooming
+// past that resolution fetches the current image at full size through `detail`.
+int fit_w = 3840;              // until the window is open and the monitor known
+int fit_h = 2400;
+image::Loader detail;
+int detail_index = -1;         // image `detail` decodes at full size; -1 = idle
 bool bar;
 float zoom = 1;                // on top of "fit"
 rl::RLVector2 pan;             // image centre offset from the view centre, logical px
@@ -198,30 +205,70 @@ fn void want() => @pool()
 			if (s.loaded) { rl::unload_texture(s.tex); s.loaded = false; }
 			s.index = wi;
 			s.status = READY;
-			s.loader.limits = { .max_edge = image::MAX_EDGE, .max_file_bytes = 128 * 1024 * 1024, .max_pixels = 64 * 1000 * 1000 };
+			s.full = false;
+			s.loader.limits = limits(true);
 			if (!s.loader.request(path_of(wi))) s.status = READ_ERROR;
 			break;
 		}
 	}
 }
 
-<* Upload finished decodes (GL on the UI thread only); mipmaps keep downscaled photos smooth. *>
+fn image::Limits limits(bool screen)
+{
+	return { .max_edge = image::MAX_EDGE, .max_file_bytes = 128 * 1024 * 1024, .max_pixels = 64 * 1000 * 1000,
+		.fit_w = screen ? fit_w : 0, .fit_h = screen ? fit_h : 0 };
+}
+
+fn void upload(Slot* s, image::Result* r)
+{
+	if (s.loaded) rl::unload_texture(s.tex);
+	s.tex = rl::load_texture_from_image(r.pixels);
+	s.full = r.pixels.width >= r.width;
+	rl::unload_image(r.pixels);
+	rl::gen_texture_mipmaps(&s.tex);
+	s.tex.set_filter(rl::RLTextureFilter.TRILINEAR);
+	s.width = r.width;
+	s.height = r.height;
+	s.loaded = s.tex.id != 0;
+}
+
+<* Upload finished decodes (GL on the UI thread only), at most one per frame and the current image first, so a
+   burst of finished neighbours never stalls a frame; mipmaps keep downscaled photos smooth. *>
 fn void poll()
 {
-	foreach (&s : slots)
+	Slot* cs = current();
+	if (detail_index >= 0)
 	{
 		image::Result r;
-		if (!s.loader.take(&r)) continue;
-		s.status = r.status;
-		if (r.status != READY) continue;
-		s.tex = rl::load_texture_from_image(r.pixels);
-		rl::unload_image(r.pixels);
-		rl::gen_texture_mipmaps(&s.tex);
-		s.tex.set_filter(rl::RLTextureFilter.TRILINEAR);
-		s.width = r.width;
-		s.height = r.height;
-		s.loaded = s.tex.id != 0;
+		if (detail.take(&r))
+		{
+			bool ok = r.status == READY && cs && cs.index == detail_index;
+			detail_index = -1;
+			if (ok) { upload(cs, &r); return; }
+			if (r.status == READY) rl::unload_image(r.pixels);
+		}
 	}
+	for (int pass = 0; pass < 2; pass++)
+	{
+		foreach (&s : slots)
+		{
+			if ((pass == 0) != (s == cs)) continue;
+			image::Result r;
+			if (!s.loader.take(&r)) continue;
+			s.status = r.status;
+			if (r.status != READY) continue;
+			upload(s, &r);
+			return;
+		}
+	}
+}
+
+<* Zoomed past the texture's resolution: decode the current image at full size (once). *>
+fn void want_detail(Slot* s, float shown_w)
+{
+	if (s.full || detail_index == s.index || shown_w <= (float)s.tex.width * 1.02f) return;
+	detail.limits = limits(false);
+	if (detail.request(path_of(s.index))) detail_index = s.index;
 }
 
 fn Slot* current()
@@ -235,6 +282,7 @@ fn void show(int i) => @pool()
 {
 	if (!count) return;
 	cur = wrap(i);
+	if (detail_index >= 0 && detail_index != cur) { detail.cancel(); detail_index = -1; }
 	zoom = 1;
 	pan = { 0, 0 };
 	want();
@@ -257,6 +305,8 @@ fn void open_path(String p) => @pool()
 {
 	foreach (&s : slots) { s.loader.cancel(); if (s.loaded) rl::unload_texture(s.tex); s.loaded = false; s.index = -1; }
 	foreach (&t : thumb_loaders) { t.loader.cancel(); t.index = -1; }
+	detail.cancel();
+	detail_index = -1;
 	foreach (&t : thumbs) { if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); *t = { .index = -1 }; }
 	strip_scroll = 0;
 	txt::set(&folder, txt::dirname(p));
@@ -318,10 +368,14 @@ fn int main(String[] args)
 	ui::zoom_shift_only = true;
 	ui::clear_color = ui::BG_HARD;
 	defer ui::close();
+	defer detail.close();
 	defer { foreach (&s : slots) { s.loader.close(); if (s.loaded) rl::unload_texture(s.tex); } }
 	defer { foreach (&t : thumb_loaders) t.loader.close(); foreach (&t : thumbs) if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); }
 	defer if (conv.running) { conv.worker.join()!!; conv.mutex.destroy(); if (conv.png) rl::mem_free(conv.png); }
 	ui::app_args(args);
+	// Screen-sized decodes from here on (physical px; Wayland: the output the window opens on is not known yet).
+	int mon = rl::get_current_monitor();
+	if (rl::get_monitor_width(mon) > 0 && rl::get_monitor_height(mon) > 0) { fit_w = rl::get_monitor_width(mon); fit_h = rl::get_monitor_height(mon); }
 	foreach (e : image_types) picker::set_ext_icon(e, ui::I_IMAGE);
 	show(cur);
 	while (ui::running()) frame();
@@ -388,11 +442,13 @@ fn void frame() => @pool()
 	}
 	else if (s && s.loaded)
 	{
-		// Fit inside the view without enlarging past 1 texel = 1 physical pixel, then the user zoom.
+		// Fit inside the view without enlarging past 1 source pixel = 1 physical pixel, then the user zoom. Sizes
+		// come from the source; the texture may be smaller (screen-sized) and is stretched over the same rect.
 		float sc = ui::px;
-		float fit = math::min(1.0f, math::min(w * sc / (float)s.tex.width, view_h * sc / (float)s.tex.height));
-		float dw = (float)s.tex.width * fit * zoom / sc;
-		float dh = (float)s.tex.height * fit * zoom / sc;
+		float fit = math::min(1.0f, math::min(w * sc / (float)s.width, view_h * sc / (float)s.height));
+		float dw = (float)s.width * fit * zoom / sc;
+		float dh = (float)s.height * fit * zoom / sc;
+		want_detail(s, dw * sc);
 		Rect dst = { w / 2 + pan[0] - dw / 2, view_h / 2 + pan[1] - dh / 2, dw, dh };
 		rl::draw_texture_pro(s.tex, { 0, 0, (float)s.tex.width, (float)s.tex.height }, dst, { 0, 0 }, 0, rl::WHITE);
 	}
