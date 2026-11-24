@@ -153,6 +153,12 @@ int fit_w = 3840;              // until the window is open and the monitor known
 int fit_h = 2400;
 image::Loader detail;
 int detail_index = -1;         // image `detail` decodes at full size; -1 = idle
+// Never an empty view while the next image decodes: the last image drawn stays up (its slot, or `kept` once its
+// slot was reused) under a "loading" badge, until the current one is ready.
+int shown = -1;                // image index last drawn
+rl::RLTexture2D kept;          // texture of `shown` after its slot was reused; id 0 = none
+int kept_w;                    // its source size
+int kept_h;
 bool bar;
 float zoom = 1;                // on top of "fit"
 rl::RLVector2 pan;             // image centre offset from the view centre, logical px
@@ -202,7 +208,12 @@ fn void want() => @pool()
 			bool needed;
 			foreach (x : wanted) if (s.index == x) needed = true;
 			if (needed) continue;
-			if (s.loaded) { rl::unload_texture(s.tex); s.loaded = false; }
+			if (s.loaded)
+			{
+				if (s.index == shown) { drop_kept(); kept = s.tex; kept_w = s.width; kept_h = s.height; }
+				else { rl::unload_texture(s.tex); }
+				s.loaded = false;
+			}
 			s.index = wi;
 			s.status = READY;
 			s.full = false;
@@ -211,6 +222,43 @@ fn void want() => @pool()
 			break;
 		}
 	}
+}
+
+fn void drop_kept()
+{
+	if (kept.id) rl::unload_texture(kept);
+	kept = {};
+}
+
+<* Fit inside the view without enlarging past 1 source pixel = 1 physical pixel, then the user zoom. Sizes come
+   from the source; the texture may be smaller (screen-sized) and is stretched over the same rect. Returns the
+   drawn width in physical px. *>
+fn float draw_image(rl::RLTexture2D tex, int src_w, int src_h, float w, float view_h)
+{
+	float sc = ui::px;
+	float fit = math::min(1.0f, math::min(w * sc / (float)src_w, view_h * sc / (float)src_h));
+	float dw = (float)src_w * fit * zoom / sc;
+	float dh = (float)src_h * fit * zoom / sc;
+	Rect dst = { w / 2 + pan[0] - dw / 2, view_h / 2 + pan[1] - dh / 2, dw, dh };
+	rl::draw_texture_pro(tex, { 0, 0, (float)tex.width, (float)tex.height }, dst, { 0, 0 }, 0, rl::WHITE);
+	return dw * sc;
+}
+
+<* The previous image while the current one decodes, with a badge naming what is coming. *>
+fn void draw_pending(float w, float view_h) => @pool()
+{
+	Slot* prev;
+	foreach (&o : slots) if (o.index == shown && o.loaded) prev = o;
+	if (prev) { draw_image(prev.tex, prev.width, prev.height, w, view_h); }
+	else if (kept.id) { draw_image(kept, kept_w, kept_h, w, view_h); }
+	else { return; } // nothing shown yet (startup, new folder): no badge flash for the first decode
+	String msg = string::tformat("%s  ·  %d / %d", txt::view(&images[cur].name), cur + 1, count);
+	float tw = math::min(ui::text_w(msg, 14), w - 120);
+	float bw = tw + 52;
+	Rect badge = { w / 2 - bw / 2, 14, bw, 32 };
+	ui::panel(badge, ui::BG, 6);
+	ui::text(ui::I_IMAGE, badge.x + 12, badge.y + 8, 15, ui::YELLOW);
+	ui::text_fit(msg, badge.x + 36, badge.y + 8, tw, 14, ui::FG);
 }
 
 fn image::Limits limits(bool screen)
@@ -307,6 +355,8 @@ fn void open_path(String p) => @pool()
 	foreach (&t : thumb_loaders) { t.loader.cancel(); t.index = -1; }
 	detail.cancel();
 	detail_index = -1;
+	drop_kept();
+	shown = -1;
 	foreach (&t : thumbs) { if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); *t = { .index = -1 }; }
 	strip_scroll = 0;
 	txt::set(&folder, txt::dirname(p));
@@ -369,6 +419,7 @@ fn int main(String[] args)
 	ui::clear_color = ui::BG_HARD;
 	defer ui::close();
 	defer detail.close();
+	defer drop_kept();
 	defer { foreach (&s : slots) { s.loader.close(); if (s.loaded) rl::unload_texture(s.tex); } }
 	defer { foreach (&t : thumb_loaders) t.loader.close(); foreach (&t : thumbs) if (t.index >= 0 && t.tex.id) rl::unload_texture(t.tex); }
 	defer if (conv.running) { conv.worker.join()!!; conv.mutex.destroy(); if (conv.png) rl::mem_free(conv.png); }
@@ -442,15 +493,13 @@ fn void frame() => @pool()
 	}
 	else if (s && s.loaded)
 	{
-		// Fit inside the view without enlarging past 1 source pixel = 1 physical pixel, then the user zoom. Sizes
-		// come from the source; the texture may be smaller (screen-sized) and is stretched over the same rect.
-		float sc = ui::px;
-		float fit = math::min(1.0f, math::min(w * sc / (float)s.width, view_h * sc / (float)s.height));
-		float dw = (float)s.width * fit * zoom / sc;
-		float dh = (float)s.height * fit * zoom / sc;
-		want_detail(s, dw * sc);
-		Rect dst = { w / 2 + pan[0] - dw / 2, view_h / 2 + pan[1] - dh / 2, dw, dh };
-		rl::draw_texture_pro(s.tex, { 0, 0, (float)s.tex.width, (float)s.tex.height }, dst, { 0, 0 }, 0, rl::WHITE);
+		want_detail(s, draw_image(s.tex, s.width, s.height, w, view_h));
+		shown = cur;
+		drop_kept();
+	}
+	else if (s && s.status == READY)
+	{
+		draw_pending(w, view_h);
 	}
 	else if (s && s.status != READY)
 	{
