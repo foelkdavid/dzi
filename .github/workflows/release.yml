@@ -45,6 +45,7 @@ jobs:
           cp README.md assets/dzi.svg "$d/"
           sed 's|@EXEC@|dzi|' dzi.desktop > "$d/dzi.desktop"
           cp -r licenses "$d/"
+          cp release/install release/uninstall "$d/"
           tar czf "$d.tar.gz" "$d"
           echo "PKG=$d.tar.gz" >> "$GITHUB_ENV"
 
@@ -72,6 +73,6 @@ jobs:
             |---|---|
             | `dzi-*-linux-x64-wayland.tar.gz` | Linux x86_64, Wayland session (no X11 / XWayland), OpenGL 3.3 |
 
-            Unpack and run `./dzi [IMAGE]`, or copy `dzi` to `~/.local/bin` (and `dzi.desktop` to
-            `~/.local/share/applications`, `dzi.svg` to `~/.local/share/icons/hicolor/scalable/apps`).
+            Unpack, then `./install` (to `~/.local`: binary, launcher, icon) or `./uninstall`; no root needed.
+            Or run it in place: `./dzi`.
             Press Ctrl + K for all shortcuts.
