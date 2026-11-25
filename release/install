@@ -8,7 +8,7 @@ bin=$HOME/.local/bin
 mkdir -p "$bin" "$data/applications" "$data/icons/hicolor/scalable/apps" "$data/dzi/licenses"
 # Replace the file (new inode) so reinstalling works while dzi is running.
 cp "$here/dzi" "$bin/.dzi-new" && chmod 755 "$bin/.dzi-new" && mv -f "$bin/.dzi-new" "$bin/dzi"
-cp "$here/licenses/FONT-OFL.txt" "$here/licenses/RAYLIB-LICENSE.txt" "$data/dzi/licenses/"
+cp "$here/licenses/FONT-OFL.txt" "$here/licenses/RAYLIB-LICENSE.txt" "$here/licenses/BMU-LICENSE.txt" "$data/dzi/licenses/"
 exec_path=$(printf '%s' "$bin/dzi" | sed 's/[\\"`$]/\\&/g; s/%/%%/g')
 sed "s|^Exec=.*|Exec=\"$exec_path\" %f|" "$here/dzi.desktop" > "$data/applications/dzi.desktop"
 cp "$here/dzi.svg" "$data/icons/hicolor/scalable/apps/dzi.svg"

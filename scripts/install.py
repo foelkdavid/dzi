@@ -45,7 +45,7 @@ def main():
     desktop = data / "applications/dzi.desktop"
     icon = data / "icons/hicolor/scalable/apps/dzi.svg"
     licenses = data / "dzi/licenses"
-    notices = ("FONT-OFL.txt", "RAYLIB-LICENSE.txt")
+    notices = ("FONT-OFL.txt", "RAYLIB-LICENSE.txt", "BMU-LICENSE.txt")
     if sys.argv[1] == "uninstall":
         for path in (binary, desktop, icon, *(licenses / name for name in notices)):
             path.unlink(missing_ok=True)
