@@ -42,7 +42,7 @@ jobs:
           d="dzi-${VERSION}-linux-x64-wayland"
           mkdir -p "$d"
           cp build/dzi "$d/"
-          cp README.md assets/dzi.svg "$d/"
+          cp README.md LICENSE assets/dzi.svg "$d/"
           sed 's|@EXEC@|dzi|' dzi.desktop > "$d/dzi.desktop"
           cp -r licenses "$d/"
           cp release/install release/uninstall "$d/"

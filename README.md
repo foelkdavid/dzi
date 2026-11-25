@@ -52,3 +52,7 @@ c3c build uninstall --trust=full                                   # uninstall
 | [CodeNewRoman Nerd Font Propo](https://www.nerdfonts.com/font-downloads) | embedded UI font ([Code New Roman](https://github.com/ryanoasis/nerd-fonts/tree/master/patched-fonts/CodeNewRoman) by Sam Radian + [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts) icons) | [SIL OFL 1.1](licenses/FONT-OFL.txt) |
 
 The font and raylib notices are in [`licenses/`](licenses/) and are installed with the app.
+
+## License
+
+dzi is MIT-licensed (see [`LICENSE`](LICENSE)); the third-party parts keep their own licenses listed above.
